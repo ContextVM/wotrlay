@@ -2,9 +2,11 @@
 
 Wotrlay is a proof-of-concept relay that explores a different approach to moderation: treat it as **resource allocation**, and let a community's **web-of-trust** influence who gets more publishing capacity. Most relay moderation debates tend to orbit two extremes: manual allowlists that don't scale well, or blunt rate limits that treat every identity the same. Wotrlay offers a third path.
 
-Wotrlay is built in Go using the Rely framework, and it is heavily inspired by the WoT example in their repository. This project builds on that foundation and explores a different moderation posture, especially around progressive rate limiting, auth, and rank integration.
+Wotrlay is built in Go using the Relay framework, and it is heavily inspired by the WoT example in that repository. This project builds on that foundation and explores a different moderation posture, especially around progressive rate limiting, auth, and rank integration.
 
-For ranking, Wotrlay integrates Relatr, a service that computes a per-pubkey score. Relatr is reached through ContextVM, which means the "ranking oracle" isn't a HTTP endpoint or nothing similar; it's a Nostr-native request/response interaction. Kudos to Vertex for pioneering the use of graph-derived scores in relay policy.
+For ranking, Wotrlay integrates Relatr, a service that computes a per-pubkey score. Relatr is reached through ContextVM, which means the "ranking oracle" isn't a HTTP endpoint; it's a Nostr-native request/response interaction. Kudos to Vertex for pioneering the use of graph-derived scores in relay policy.
+
+We're running a public instance at `wss://wotr.relatr.xyz` that anyone can connect to and test—it uses the default Relatr instance for ranking.
 
 This post is part of a larger series. Next, we'll publish a practical article about building ContextVM clients without SDKs or dependencies—just keys, events, and relays. Here, we'll walk through how Wotrlay works: the bucket model, how rank drives permissions, the newcomer onboarding path, and why ContextVM makes the ranking oracle swappable without rebuilding the relay.
 
@@ -83,3 +85,9 @@ Expect a policy that is legible (rank maps to permissions), resistant to cheap s
 Don't expect a universal rank metric, or a replacement for human judgement where real abuse is involved.
 
 The point is to widen the design space: moderation can be expressed as explicit, programmable constraints—strict where they must be, permissive where they can be, and always replaceable.
+
+---
+
+**Want to try it out?** We're running a public instance at `wss://wotr.relatr.xyz` that anyone can connect to and test. It uses the default Relatr instance for ranking.
+
+**Want to explore the implementation or run your own instance?** Check out the repository at [github.com/ContextVM/wotrlay](https://github.com/ContextVM/wotrlay) for the complete source code, configuration details, and setup instructions.
