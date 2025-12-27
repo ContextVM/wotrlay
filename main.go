@@ -15,21 +15,6 @@ import (
 	"github.com/pippellia-btc/rely"
 )
 
-/*
-wotrlay: WoT-based relay with true token bucket rate limiting
-
-This relay enforces community spam-protection using an external trust score r ∈ [0,1].
-Rate limiting is enforced per event using event.PubKey (no NIP-42 required).
-
-Key features:
-- Trust-tiered publishing policy with kind gating
-- True token bucket with continuous refill (not daily reset)
-- Backfill support for very high-trust pubkeys
-- Minimal IP limiter only for rank-queue protection
-
-Source: https://vertexlab.io/blog/reputation_rate_limit
-*/
-
 // Config holds application configuration parameters.
 type Config struct {
 	// MidThreshold: trust score above which all kinds are allowed
