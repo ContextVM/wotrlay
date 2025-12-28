@@ -13,8 +13,9 @@ func TestRankCacheIntegration(t *testing.T) {
 	// Load test configuration (will auto-generate secret key if not set)
 	cfg := loadConfig()
 
-	// Create rank cache with configuration
-	cache := NewRankCache(ctx, cfg)
+	// Create rank cache with configuration and observability
+	obs := &Observability{}
+	cache := NewRankCache(ctx, cfg, obs)
 
 	// Test pubkey from the successful integration test
 	testPubkey := "6b3780ef2972e73d370b84a3e51e7aa9ae34bf412938dcfbd9c5f63b221416c8"

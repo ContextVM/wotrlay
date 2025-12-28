@@ -42,10 +42,11 @@ Configuration is loaded from environment variables in [`main.go`](main.go:33):
 
 - `MID_THRESHOLD` (default: 0.5) - trust score above which all kinds are allowed
 - `HIGH_THRESHOLD` (optional) - trust score above which backfill is free; if not set, there is no distinct high tier and all pubkeys with `r ≥ midThreshold` get maximum rate
-- `RANK_QUEUE_IP_DAILY_LIMIT` (default: 100) - max rank refresh requests per day per IP group
+- `RANK_QUEUE_IP_DAILY_LIMIT` (default: 250) - max rank refresh requests per day per IP group
 - `RELATR_RELAY` (default: wss://relay.contextvm.org) - ContextVM relay URL for rank lookups
 - `RELATR_PUBKEY` (default: 750682303c9f0ddad75941b49edc9d46e3ed306b9ee3335338a21a3e404c5fa3) - Relatr service pubkey
 - `RELATR_SECRET_KEY` (optional) - Secret key for signing rank requests; auto-generated if not provided
+- `DEBUG` (optional) - Enable verbose debug logging and periodic observability metrics
 
 ## Usage
 
@@ -58,10 +59,11 @@ Create a `.env` file or set environment variables:
 export MID_THRESHOLD=0.5
 # HIGH_THRESHOLD is optional - omit to use 3-tier system (no high tier)
 # export HIGH_THRESHOLD=0.9  # uncomment to enable 4-tier system with backfill
-export RANK_QUEUE_IP_DAILY_LIMIT=100
+export RANK_QUEUE_IP_DAILY_LIMIT=250
 export RELATR_RELAY="wss://relay.contextvm.org"
 export RELATR_PUBKEY="750682303c9f0ddad75941b49edc9d46e3ed306b9ee3335338a21a3e404c5fa3"
 export RELATR_SECRET_KEY="your-secret-key-here"  # auto-generated if not set
+export DEBUG="1"  # optional: enable verbose logging and metrics
 ```
 
 ### Building
@@ -118,11 +120,40 @@ The relay returns typed errors for event rejections that can be used for client-
 - **Capacity**: Minimum 1 token to ensure pubkeys can always publish eventually
 - **TTL**: Inactive buckets are cleaned up after 1 hour
 - **Monitoring**: `Limiter.GetTokens()` is available for debugging but should not be used in production code
+- **Observability**: Built-in atomic counters track error types and cache behavior; logged periodically when DEBUG is enabled
 
 ### Security
 
 - **Secret key**: `RELATR_SECRET_KEY` is never logged. If not provided, a temporary key is auto-generated (logged as "generated temporary key" without the value)
 - **Configuration**: All sensitive values should be provided via environment variables
+
+## Observability
+
+When `DEBUG` is enabled, the relay logs operational metrics every 30 seconds:
+
+```
+observability: rate_limited=5 kind_not_allowed=2 invalid_timestamp=1 cache_hits=150 cache_misses=25
+```
+
+**Metrics tracked:**
+
+- `rate_limited` - Number of events rejected due to rate limiting
+- `kind_not_allowed` - Number of events rejected due to kind gating
+- `invalid_timestamp` - Number of events rejected due to future timestamps
+- `cache_hits` - Number of rank cache hits
+- `cache_misses` - Number of rank cache misses
+
+**Usage:**
+
+1. Enable debug mode: `export DEBUG=1`
+2. Run the relay: `./wotrlay`
+3. Watch logs for periodic metrics output
+
+These metrics are useful for:
+- Monitoring relay health and performance
+- Detecting abuse patterns
+- Tuning rate limit thresholds
+- Understanding cache hit ratios
 
 ## License
 

@@ -1,3 +1,6 @@
+// Package main implements a Web-of-Trust (WoT) based Nostr relay
+// with reputation-driven rate limiting. It enforces community spam-protection
+// using external trust scores, with rate limits determined by a pubkey's reputation.
 package main
 
 import (
@@ -7,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -35,6 +39,9 @@ type Config struct {
 
 	// RelatrSecretKey: Secret key for signing rank requests (should be loaded from env)
 	RelatrSecretKey string
+
+	// Debug: whether to enable verbose debug logging
+	Debug bool
 }
 
 // Timestamp sanity window: reject events >24h in the future
@@ -56,6 +63,15 @@ var (
 	ErrRateLimited      = errors.New("rate-limited: please try again later")
 )
 
+// Observability tracks operational metrics for monitoring and debugging.
+type Observability struct {
+	rateLimitedCount      atomic.Uint64
+	kindNotAllowedCount   atomic.Uint64
+	invalidTimestampCount atomic.Uint64
+	rankCacheHits         atomic.Uint64
+	rankCacheMisses       atomic.Uint64
+}
+
 // loadConfig loads configuration from environment variables with defaults and validation.
 func loadConfig() Config {
 	// Get HighThreshold as optional parameter
@@ -71,10 +87,11 @@ func loadConfig() Config {
 	cfg := Config{
 		MidThreshold:          getEnvFloat("MID_THRESHOLD", 0.5),
 		HighThreshold:         highThreshold,
-		RankQueueIPDailyLimit: getEnvFloat("RANK_QUEUE_IP_DAILY_LIMIT", 100),
+		RankQueueIPDailyLimit: getEnvFloat("RANK_QUEUE_IP_DAILY_LIMIT", 250),
 		RelatrRelay:           getEnvString("RELATR_RELAY", "wss://relay.contextvm.org"),
 		RelatrPubkey:          getEnvString("RELATR_PUBKEY", "750682303c9f0ddad75941b49edc9d46e3ed306b9ee3335338a21a3e404c5fa3"),
 		RelatrSecretKey:       os.Getenv("RELATR_SECRET_KEY"),
+		Debug:                 os.Getenv("DEBUG") != "",
 	}
 
 	// Validate thresholds
@@ -122,12 +139,15 @@ func main() {
 	// Load configuration
 	cfg := loadConfig()
 
+	// Initialize observability metrics
+	obs := &Observability{}
+
 	// Setup context with proper signal handling (SIGINT and SIGTERM)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	// Initialize dependencies with configuration
-	cache := NewRankCache(ctx, cfg)
+	cache := NewRankCache(ctx, cfg, obs)
 	limiter := NewLimiter(ctx)
 
 	// Initialize Badger event store backend
@@ -137,18 +157,34 @@ func main() {
 	}
 	defer db.Close()
 
+	// Start periodic observability logging if debug is enabled
+	if cfg.Debug {
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					logObservability(obs)
+				}
+			}
+		}()
+	}
+
 	relay := rely.NewRelay(
 		rely.WithDomain("relay.example.com"),
 	)
 
 	// No NIP-42 auth requirement - rate limiting is based on event.PubKey
 	relay.On.Event = func(c rely.Client, e *nostr.Event) error {
-		return handleEvent(ctx, c, e, cfg, cache, limiter, &db)
+		return handleEvent(ctx, c, e, cfg, cache, limiter, &db, obs)
 	}
 
 	// Query hook for REQ messages
 	relay.On.Req = func(ctx context.Context, c rely.Client, f nostr.Filters) ([]nostr.Event, error) {
-		return Query(ctx, c, f, &db)
+		return Query(ctx, c, f, &db, cfg.Debug)
 	}
 
 	if err := relay.StartAndServe(ctx, "localhost:3334"); err != nil {
@@ -157,30 +193,32 @@ func main() {
 }
 
 // handleEvent implements the v2 event handling flow
-func handleEvent(ctx context.Context, c rely.Client, e *nostr.Event, cfg Config, cache *RankCache, limiter *Limiter, db *badger.BadgerBackend) error {
+func handleEvent(ctx context.Context, c rely.Client, e *nostr.Event, cfg Config, cache *RankCache, limiter *Limiter, db *badger.BadgerBackend, obs *Observability) error {
 	now := time.Now()
 
 	// 1. Extract pubkey
 	pubkey := e.PubKey
 
 	// 2. Get rank from cache, with best-effort refresh on miss
-	rank := lookupRank(ctx, c, e, cfg, cache, limiter)
+	rank := lookupRank(ctx, c, e, cfg, cache, limiter, obs)
 
 	// 3. Kind gating: only Kind 1 allowed below midThreshold
 	if rank < cfg.MidThreshold && e.Kind != 1 {
+		obs.kindNotAllowedCount.Add(1)
 		return ErrKindNotAllowed
 	}
 
 	// 4. Timestamp sanity: reject events too far in the future
 	eventTime := time.Unix(int64(e.CreatedAt), 0)
 	if eventTime.Sub(now) > timestampSanityWindow {
+		obs.invalidTimestampCount.Add(1)
 		return ErrInvalidTimestamp
 	}
 
 	// 5. Backfill rule: free for very high trust if event is old
 	if cfg.HighThreshold != nil && rank >= *cfg.HighThreshold && now.Sub(eventTime) > backfillAgeThreshold {
 		// Backfill is free - skip rate limiting
-		return Save(ctx, e, db)
+		return Save(ctx, e, db, cfg.Debug)
 	}
 
 	// 6. Apply pubkey token bucket
@@ -194,46 +232,45 @@ func handleEvent(ctx context.Context, c rely.Client, e *nostr.Event, cfg Config,
 	}
 
 	if !limiter.Allow(pubkey, capacity, refillRate) {
+		obs.rateLimitedCount.Add(1)
 		return ErrRateLimited
 	}
 
 	// 7. Save event
-	return Save(ctx, e, db)
+	return Save(ctx, e, db, cfg.Debug)
 }
 
 // calculateDailyRate returns the target allowed events per day based on trust score
 func calculateDailyRate(r float64, cfg Config) float64 {
-	// Tier A: r == 0 - Kind 1 only, 1 event/day
-	if r == 0 {
+	switch {
+	case r <= 0:
 		return 1
+	case r < cfg.MidThreshold:
+		// Tier B: linear 1 → 100
+		return 1 + (r/cfg.MidThreshold)*99
+	case cfg.HighThreshold != nil && r < *cfg.HighThreshold:
+		// Tier C: linear 100 → 5000
+		span := *cfg.HighThreshold - cfg.MidThreshold
+		return 100 + ((r-cfg.MidThreshold)/span)*4900
+	default:
+		// Tier D: max rate
+		return 10000
 	}
-
-	// Tier B: 0 < r < midThreshold - Kind 1 only, linear from 1 to 100/day
-	if r < cfg.MidThreshold {
-		return 1 + (r/cfg.MidThreshold)*(100-1)
-	}
-
-	// Tier C: midThreshold ≤ r < highThreshold (if highThreshold is set) - all kinds, linear from 100 to 5000/day
-	if cfg.HighThreshold != nil && r < *cfg.HighThreshold {
-		return 100 + ((r-cfg.MidThreshold)/(*cfg.HighThreshold-cfg.MidThreshold))*(5000-100)
-	}
-
-	// Tier D: r ≥ highThreshold (if set) OR r ≥ midThreshold (if highThreshold is nil) - all kinds, cap at 10,000/day
-	return 10000
 }
 
 // lookupRank returns the rank for a pubkey, performing a best-effort refresh on cache miss.
-// It gates refresh attempts by IP to avoid a single IP forcing lots of rank lookups.
-func lookupRank(ctx context.Context, c rely.Client, e *nostr.Event, cfg Config, cache *RankCache, limiter *Limiter) float64 {
+// It gates refresh attempts by IP group to protect rank provider from abuse.
+func lookupRank(ctx context.Context, c rely.Client, e *nostr.Event, cfg Config, cache *RankCache, limiter *Limiter, obs *Observability) float64 {
 	pubkey := e.PubKey
 	rank, exists := cache.Rank(pubkey)
 	if exists {
 		return rank
 	}
 
-	// Gate refresh attempts by IP
+	// Gate refresh attempts by IP group to protect rank provider from abuse
 	ipGroup := c.IP().Group()
-	if limiter.Allow(rankQueueKeyPrefix+ipGroup, cfg.RankQueueIPDailyLimit, cfg.RankQueueIPDailyLimit/secondsPerDay) {
+	rankQueueKey := rankQueueKeyPrefix + ipGroup
+	if limiter.Allow(rankQueueKey, cfg.RankQueueIPDailyLimit, cfg.RankQueueIPDailyLimit/secondsPerDay) {
 		refreshCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 		if refreshed, err := cache.GetRank(refreshCtx, pubkey); err == nil {
@@ -242,12 +279,14 @@ func lookupRank(ctx context.Context, c rely.Client, e *nostr.Event, cfg Config, 
 		// Best-effort fallback: enqueue for async refresh and proceed with rank=0
 		cache.tryEnqueue(pubkey)
 	} else {
-		log.Printf("rank-queue rate-limited for IP %s, skipping refresh for %s", ipGroup, pubkey)
+		if cfg.Debug {
+			log.Printf("rank-queue rate-limited for IP %s, skipping refresh", ipGroup)
+		}
 	}
 	return 0
 }
 
-func Save(ctx context.Context, e *nostr.Event, db *badger.BadgerBackend) error {
+func Save(ctx context.Context, e *nostr.Event, db *badger.BadgerBackend, debug bool) error {
 	// Save event to Badger backend
 	err := db.SaveEvent(ctx, e)
 	if err != nil {
@@ -255,16 +294,21 @@ func Save(ctx context.Context, e *nostr.Event, db *badger.BadgerBackend) error {
 		return err
 	}
 
-	// Minimal logging: only essential fields to avoid expensive event serialization
-	log.Printf("saved event id=%s kind=%d pubkey=%s", e.ID, e.Kind, e.PubKey)
+	// Only log if DEBUG is enabled to reduce production noise
+	if debug {
+		log.Printf("saved event id=%s kind=%d pubkey=%s", e.ID, e.Kind, e.PubKey)
+	}
 	return nil
 }
 
 // Query handles REQ messages by querying the event store
-func Query(ctx context.Context, c rely.Client, f nostr.Filters, db *badger.BadgerBackend) ([]nostr.Event, error) {
-	log.Printf("received filters %v", f)
+func Query(ctx context.Context, c rely.Client, f nostr.Filters, db *badger.BadgerBackend, debug bool) ([]nostr.Event, error) {
+	if debug {
+		log.Printf("received filters %v", f)
+	}
 
-	var events []nostr.Event
+	// Preallocate slice to reduce growth churn (128 is a reasonable default for most queries)
+	events := make([]nostr.Event, 0, 128)
 
 	// Query events from the Badger backend for each filter
 	// The eventstore QueryEvents takes a single filter and returns a channel
@@ -281,6 +325,21 @@ func Query(ctx context.Context, c rely.Client, f nostr.Filters, db *badger.Badge
 		}
 	}
 
-	log.Printf("query returned %d events", len(events))
+	if debug {
+		log.Printf("query returned %d events", len(events))
+	}
 	return events, nil
+}
+
+// logObservability prints current counter values for debugging/monitoring
+func logObservability(obs *Observability) {
+	// Load atomically to avoid race conditions
+	rateLimited := obs.rateLimitedCount.Load()
+	kindNotAllowed := obs.kindNotAllowedCount.Load()
+	invalidTimestamp := obs.invalidTimestampCount.Load()
+	cacheHits := obs.rankCacheHits.Load()
+	cacheMisses := obs.rankCacheMisses.Load()
+
+	log.Printf("observability: rate_limited=%d kind_not_allowed=%d invalid_timestamp=%d cache_hits=%d cache_misses=%d",
+		rateLimited, kindNotAllowed, invalidTimestamp, cacheHits, cacheMisses)
 }

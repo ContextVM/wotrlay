@@ -1,3 +1,6 @@
+// Package main implements a Web-of-Trust (WoT) based Nostr relay
+// with reputation-driven rate limiting. It enforces community spam-protection
+// using external trust scores, with rate limits determined by a pubkey's reputation.
 package main
 
 import (
@@ -41,6 +44,9 @@ type RankCache struct {
 
 	// lastClean tracks when the last eviction scan was performed
 	lastClean time.Time
+
+	// Observability metrics
+	obs *Observability
 }
 
 type TimeRank struct {
@@ -93,7 +99,7 @@ type jsonRPCResponse struct {
 	} `json:"error"`
 }
 
-func NewRankCache(ctx context.Context, cfg Config) *RankCache {
+func NewRankCache(ctx context.Context, cfg Config, obs *Observability) *RankCache {
 	cache := &RankCache{
 		ranks:              make(map[string]TimeRank, 100),
 		refresh:            make(chan string, 100),
@@ -103,6 +109,7 @@ func NewRankCache(ctx context.Context, cfg Config) *RankCache {
 		relatrPubkey:       cfg.RelatrPubkey,
 		relatrSecretKey:    cfg.RelatrSecretKey,
 		lastClean:          time.Now(),
+		obs:                obs,
 	}
 
 	go cache.refresher(ctx)
@@ -152,6 +159,7 @@ func (c *RankCache) Rank(pubkey string) (float64, bool) {
 	c.mu.RUnlock()
 
 	if !exists {
+		c.obs.rankCacheMisses.Add(1)
 		c.tryEnqueue(pubkey)
 		return 0, false
 	}
@@ -159,6 +167,7 @@ func (c *RankCache) Rank(pubkey string) (float64, bool) {
 	if time.Since(rank.Timestamp) > c.StaleThreshold {
 		c.tryEnqueue(pubkey)
 	}
+	c.obs.rankCacheHits.Add(1)
 	return rank.Rank, true
 }
 
@@ -213,36 +222,36 @@ func (c *RankCache) GetRank(ctx context.Context, pubkey string) (float64, error)
 }
 
 // Update uses the provided ranks to update the cache.
+// Ranks are clamped to [0,1] to ensure valid values.
 func (c *RankCache) Update(ts time.Time, ranks ...PubRank) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	for _, r := range ranks {
+		// Clamp rank to valid range [0,1]
+		if r.Rank < 0 {
+			r.Rank = 0
+		} else if r.Rank > 1 {
+			r.Rank = 1
+		}
 		c.ranks[r.Pubkey] = TimeRank{Rank: r.Rank, Timestamp: ts}
 	}
 }
 
-// Clean scans the ranks of the cache and removed old ones.
-func (c *RankCache) Clean() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	now := time.Now()
-	for pk, rank := range c.ranks {
-		if now.Sub(rank.Timestamp) > c.MaxRefreshInterval {
-			delete(c.ranks, pk)
-		}
-	}
-	c.lastClean = now
-}
-
 // updateAndClean updates ranks and removes expired entries while holding the lock once.
 // Eviction only runs if enough time has elapsed since the last clean (MaxRefreshInterval/2).
+// Ranks are clamped to [0,1] to ensure valid values.
 func (c *RankCache) updateAndClean(ts time.Time, ranks []PubRank) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	for _, r := range ranks {
+		// Clamp rank to valid range [0,1]
+		if r.Rank < 0 {
+			r.Rank = 0
+		} else if r.Rank > 1 {
+			r.Rank = 1
+		}
 		c.ranks[r.Pubkey] = TimeRank{Rank: r.Rank, Timestamp: ts}
 	}
 
@@ -394,8 +403,11 @@ func (c *RankCache) refreshBatch(ctx context.Context, batch []string) error {
 
 // contextVMResponse sends the request and fetches the response using the request ID.
 // It reuses the cached relay connection for efficiency.
-// Note: The caller (lookupRank) already sets a 2s timeout, so we don't add another timeout here.
 func (c *RankCache) contextVMResponse(ctx context.Context, request *nostr.Event) (*nostr.Event, error) {
+	// Add timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
 	relay, err := c.getRelay(ctx)
 	if err != nil {
 		return nil, err
@@ -420,8 +432,13 @@ func (c *RankCache) contextVMResponse(ctx context.Context, request *nostr.Event)
 		return nil, fmt.Errorf("failed to fetch the response: %w", err)
 	}
 
-	if len(results) != 1 {
-		return nil, fmt.Errorf("failed to fetch the response: expected 1 response, got %d", len(results))
+	if len(results) == 0 {
+		return nil, fmt.Errorf("failed to fetch the response: no responses received")
+	}
+
+	// If multiple responses, pick the first one and log a warning
+	if len(results) > 1 {
+		log.Printf("WARNING: received %d responses for request %s, using first one", len(results), request.ID)
 	}
 
 	return results[0], nil

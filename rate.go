@@ -1,3 +1,6 @@
+// Package main implements a Web-of-Trust (WoT) based Nostr relay
+// with reputation-driven rate limiting. It enforces community spam-protection
+// using external trust scores, with rate limits determined by a pubkey's reputation.
 package main
 
 import (
@@ -30,7 +33,7 @@ func NewLimiter(ctx context.Context) *Limiter {
 	limiter := &Limiter{
 		buckets:         make(map[string]*Bucket, 100),
 		TimeToLive:      time.Hour,
-		CleanupInterval: 24 * time.Hour,
+		CleanupInterval: time.Hour,
 	}
 
 	go limiter.cleaner(ctx)
@@ -131,12 +134,9 @@ func (l *Limiter) Clean() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	now := time.Now()
 	for id, b := range l.buckets {
-		b.mu.Lock()
-		age := time.Since(b.lastActive)
-		b.mu.Unlock()
-
-		if age > l.TimeToLive {
+		if now.Sub(b.lastActive) > l.TimeToLive {
 			delete(l.buckets, id)
 		}
 	}
