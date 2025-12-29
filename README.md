@@ -1,3 +1,5 @@
+![wotrlay](https://blossom.band/2e2664e11cc3cf69e4488beca8ae0875845ad166d982feb61bb111bdc5304b5d.png)
+
 # wotrlay
 
 A Web-of-Trust (WoT) based Nostr relay with reputation-driven rate limiting.
