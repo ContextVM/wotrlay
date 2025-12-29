@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  wotrlay:
+    build: .
+    container_name: wotrlay
+    ports:
+      - "3334:3334"
+    volumes:
+      - wotrlay_data:/app/badger
+    environment:
+      - DEBUG=1
+    restart: unless-stopped
+    networks:
+      - wotrlay_network
+
+volumes:
+  wotrlay_data:
+    driver: local
+
+networks:
+  wotrlay_network:
+    driver: bridge

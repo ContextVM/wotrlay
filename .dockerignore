@@ -1,0 +1,31 @@
+# Git files
+.git
+.gitignore
+
+# Development files
+.env
+.env.example
+*.md
+wotrlay-v2-analysis.md
+
+# Build artifacts
+wotrlay
+*.log
+
+# Test files
+*_test.go
+
+# IDE files
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker files
+Dockerfile
+docker-compose.yml
+.dockerignore

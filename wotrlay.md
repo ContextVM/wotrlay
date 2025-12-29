@@ -6,7 +6,7 @@ Wotrlay is built in Go using the Rely framework, and it is heavily inspired by t
 
 For ranking, Wotrlay integrates Relatr, a service that computes a per-pubkey score. Relatr is reached through ContextVM, which means the ranking service isn't a HTTP endpoint, it's a Nostr-native request/response interaction.
 
-This post is part of a larger series. Next, we'll publish a practical article about building CVM clients without SDKs or dependencies—just keys, events, and relays, the code of project is a demonstration of this as well. Here, we'll walk through how Wotrlay works: the bucket model, how rank drives permissions, the newcomer onboarding path, and why ContextVM makes the ranking service swappable without rebuilding the relay.
+This post is part of a larger series. Next, we'll publish a practical article about building CVM clients without SDKs or dependencies—just keys, events, and relays. That continuation is now available as [`docs/article/cvm-clients-nostr-way.md`](docs/article/cvm-clients-nostr-way.md). Here, we'll walk through how Wotrlay works: the bucket model, how rank drives permissions, the newcomer onboarding path, and why ContextVM makes the ranking service swappable without rebuilding the relay.
 
 BTW We're running a public instance at wss://wotr.relatr.xyz that anyone can connect to and test.
 
@@ -91,6 +91,5 @@ The point is to widen the design space: moderation can be expressed as explicit,
 Want to try it out? We're running a public instance at wss://wotr.relatr.xyz that anyone can connect to and test. It uses the default Relatr instance for ranking.
 
 Want to explore the implementation or run your own instance? Check out the repository at ContextVM/wotrlay for the complete source code, configuration details, and setup instructions.
-
 
 

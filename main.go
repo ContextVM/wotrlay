@@ -23,6 +23,13 @@ import (
 	"github.com/pippellia-btc/rely"
 )
 
+// Build-time variables (set via -ldflags)
+var (
+	Version   string = "dev"
+	Commit    string = "unknown"
+	BuildTime string = "unknown"
+)
+
 // Config holds application configuration parameters.
 type Config struct {
 	// MidThreshold: trust score above which all kinds are allowed
@@ -210,6 +217,9 @@ func createRelayInfoDocument(cfg Config) nip11.RelayInformationDocument {
 }
 
 func main() {
+	// Log version information
+	log.Printf("Starting wotrlay relay v%s (commit: %s, built: %s)", Version, Commit, BuildTime)
+
 	// Load configuration
 	cfg := loadConfig()
 
@@ -294,7 +304,7 @@ func main() {
 
 	// Create HTTP server with custom router
 	server := &http.Server{
-		Addr:    "localhost:3334",
+		Addr:    "0.0.0.0:3334",
 		Handler: router,
 	}
 	exitErr := make(chan error, 1)
