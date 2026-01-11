@@ -400,10 +400,6 @@ func (c *RankCache) refreshBatch(ctx context.Context, batch []string) error {
 // contextVMResponse sends the request and fetches the response using the request ID.
 // It reuses the cached relay connection for efficiency.
 func (c *RankCache) contextVMResponse(ctx context.Context, request *nostr.Event) (*nostr.Event, error) {
-	// Add timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
 	relay, err := c.getRelay(ctx)
 	if err != nil {
 		return nil, err

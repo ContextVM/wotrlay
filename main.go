@@ -461,7 +461,7 @@ func lookupRank(ctx context.Context, c rely.Client, e *nostr.Event, cfg Config, 
 
 	// Gate refresh attempts by global relay-wide limiter to protect rank provider from abuse
 	if limiter.Allow("global-rank-refresh", cfg.GlobalRankRefreshLimit, cfg.GlobalRankRefreshLimit) {
-		refreshCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		refreshCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		if refreshed, err := cache.GetRank(refreshCtx, pubkey); err == nil {
 			return refreshed
