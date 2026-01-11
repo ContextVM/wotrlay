@@ -29,3 +29,12 @@ Thumbs.db
 Dockerfile
 docker-compose.yml
 .dockerignore
+
+# Data directories (CRITICAL - prevents large DB from being copied)
+wotrlay_data/
+*.vlog
+*.sst
+
+# BadgerDB files
+badger/
+*.badger

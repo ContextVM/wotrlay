@@ -4,20 +4,20 @@ FROM golang:1.24.1-alpine AS builder
 # Set working directory
 WORKDIR /app
 
-# Copy go mod files
+# Copy go mod files first for better layer caching
 COPY go.mod go.sum ./
 
-# Download dependencies
+# Download dependencies (cached layer)
 RUN go mod download
 
-# Copy source code
-COPY . .
+# Copy only necessary source files (not entire directory)
+COPY *.go ./
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o wotrlay .
+# Build the application with stripped binary for smaller size
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o wotrlay .
 
 # Final stage: minimal runtime image
-FROM alpine:latest
+FROM alpine:3.20
 
 # Install ca-certificates for HTTPS requests
 RUN apk --no-cache add ca-certificates
