@@ -75,7 +75,7 @@ You can configure the relay using environment variables in the `docker-compose.y
 - `MID_THRESHOLD` (default: 0.5) - Trust score threshold
 - `HIGH_THRESHOLD` (optional) - High trust threshold for backfill
 - `URL_POLICY_ENABLED` (optional) - Enable URL restrictions
-- `RANK_QUEUE_IP_DAILY_LIMIT` (default: 250) - Rank refresh rate limit
+- `GLOBAL_RANK_REFRESH_LIMIT` (default: 500) - Rank refresh rate limit (requests per second, relay-wide)
 - `RELATR_RELAY` (default: wss://relay.contextvm.org) - ContextVM relay URL
 - `RELATR_PUBKEY` (default: 750682303c9f0ddad75941b49edc9d46e3ed306b9ee3335338a21a3e404c5fa3) - Relatr pubkey
 - `RELATR_SECRET_KEY` (optional) - Secret key for signing requests

@@ -42,8 +42,8 @@ type Config struct {
 	// URLPolicyEnabled: whether to enforce URL restriction for users below MidThreshold
 	URLPolicyEnabled bool
 
-	// RankQueueIPDailyLimit: max rank refresh requests per day per IP group
-	RankQueueIPDailyLimit float64
+	// GlobalRankRefreshLimit: max rank refresh requests per second, relay-wide
+	GlobalRankRefreshLimit float64
 
 	// RankCacheSize: maximum number of entries in rank cache (default: 100000)
 	RankCacheSize int
@@ -77,9 +77,6 @@ const backfillAgeThreshold = 24 * time.Hour
 
 // secondsPerDay is the number of seconds in a day for rate calculations
 const secondsPerDay = 86400
-
-// rankQueueKeyPrefix is the prefix for rank-queue rate limiter keys
-const rankQueueKeyPrefix = "rank-queue:"
 
 // Sentinel errors for event rejection reasons.
 // Error strings should not be capitalized or end with punctuation.
@@ -130,15 +127,15 @@ func loadConfig() Config {
 	}
 
 	cfg := Config{
-		MidThreshold:          getEnvFloat("MID_THRESHOLD", 0.5),
-		HighThreshold:         highThreshold,
-		URLPolicyEnabled:      getEnvBool("URL_POLICY_ENABLED", false),
-		RankQueueIPDailyLimit: getEnvFloat("RANK_QUEUE_IP_DAILY_LIMIT", 1000),
-		RankCacheSize:         getEnvInt("RANK_CACHE_SIZE", 100000),
-		RelatrRelay:           getEnvString("RELATR_RELAY", "wss://relay.contextvm.org"),
-		RelatrPubkey:          getEnvString("RELATR_PUBKEY", "750682303c9f0ddad75941b49edc9d46e3ed306b9ee3335338a21a3e404c5fa3"),
-		RelatrSecretKey:       os.Getenv("RELATR_SECRET_KEY"),
-		Debug:                 os.Getenv("DEBUG") != "",
+		MidThreshold:           getEnvFloat("MID_THRESHOLD", 0.5),
+		HighThreshold:          highThreshold,
+		URLPolicyEnabled:       getEnvBool("URL_POLICY_ENABLED", false),
+		GlobalRankRefreshLimit: getEnvFloat("GLOBAL_RANK_REFRESH_LIMIT", 500),
+		RankCacheSize:          getEnvInt("RANK_CACHE_SIZE", 100000),
+		RelatrRelay:            getEnvString("RELATR_RELAY", "wss://relay.contextvm.org"),
+		RelatrPubkey:           getEnvString("RELATR_PUBKEY", "750682303c9f0ddad75941b49edc9d46e3ed306b9ee3335338a21a3e404c5fa3"),
+		RelatrSecretKey:        os.Getenv("RELATR_SECRET_KEY"),
+		Debug:                  os.Getenv("DEBUG") != "",
 		// NIP-11 Relay Information Document configuration
 		RelayName:        getEnvString("RELAY_NAME", "wotrlay"),
 		RelayDescription: getEnvString("RELAY_DESCRIPTION", "A Web-of-Trust (WoT) based Nostr relay with reputation-driven rate limiting"),
@@ -451,8 +448,8 @@ func calculateDailyRate(r float64, cfg Config) float64 {
 }
 
 // lookupRank returns the rank for a pubkey, performing a best-effort refresh on cache miss.
-// It gates refresh attempts by IP group to protect rank provider from abuse.
-// Preserves stale cache data when IP is rate-limited or refresh fails.
+// Uses a global relay-wide limiter to protect rank provider from abuse.
+// Preserves stale cache data when refresh fails or global limit is hit.
 func lookupRank(ctx context.Context, c rely.Client, e *nostr.Event, cfg Config, cache *RankCache, limiter *Limiter, obs *Observability) float64 {
 	pubkey := e.PubKey
 
@@ -462,10 +459,8 @@ func lookupRank(ctx context.Context, c rely.Client, e *nostr.Event, cfg Config, 
 		return rank
 	}
 
-	// Gate refresh attempts by IP group to protect rank provider from abuse
-	ipGroup := c.IP().Group()
-	rankQueueKey := rankQueueKeyPrefix + ipGroup
-	if limiter.Allow(rankQueueKey, cfg.RankQueueIPDailyLimit, cfg.RankQueueIPDailyLimit/secondsPerDay) {
+	// Gate refresh attempts by global relay-wide limiter to protect rank provider from abuse
+	if limiter.Allow("global-rank-refresh", cfg.GlobalRankRefreshLimit, cfg.GlobalRankRefreshLimit) {
 		refreshCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 		if refreshed, err := cache.GetRank(refreshCtx, pubkey); err == nil {
@@ -481,15 +476,15 @@ func lookupRank(ctx context.Context, c rely.Client, e *nostr.Event, cfg Config, 
 		// No stale data, enqueue for async refresh and proceed with rank=0
 		cache.tryEnqueue(pubkey)
 	} else {
-		// IP rate-limited - check if we have stale data preserved
+		// Global rate-limited - check if we have stale data preserved
 		if rank, exists := cache.Rank(pubkey); exists {
 			if cfg.Debug {
-				log.Printf("IP rate-limited for %s, using stale rank %f", ipGroup, rank)
+				log.Printf("global rank refresh rate-limited, using stale rank %f for %s", rank, pubkey)
 			}
 			return rank
 		}
 		if cfg.Debug {
-			log.Printf("rank-queue rate-limited for IP %s, no stale data available", ipGroup)
+			log.Printf("global rank refresh rate-limited, no stale data available for %s", pubkey)
 		}
 	}
 	return 0

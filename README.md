@@ -15,7 +15,7 @@ wotrlay enforces community spam-protection using external trust scores (`r ∈ [
 - **True token bucket**: Smooth, continuous refill (not daily reset)
 - **Backfill support**: High-trust pubkeys can migrate old history without throttling
 - **No NIP-42 required**: Rate limiting based on `event.PubKey`
-- **Minimal IP limiting**: Only protects rank-queue operations
+- **Global rate limiting**: Protects rank provider from abuse with relay-wide limiter
 
 ## Rate Limit Tiers
 
@@ -45,7 +45,7 @@ Configuration is loaded from environment variables in [`main.go`](main.go:33):
 - `MID_THRESHOLD` (default: 0.5) - trust score above which all kinds are allowed
 - `HIGH_THRESHOLD` (optional) - trust score above which backfill is free; if not set, there is no distinct high tier and all pubkeys with `r ≥ midThreshold` get maximum rate
 - `URL_POLICY_ENABLED` (optional) - enables URL restriction for users below `MID_THRESHOLD`
-- `RANK_QUEUE_IP_DAILY_LIMIT` (default: 250) - max rank refresh requests per day per IP group
+- `GLOBAL_RANK_REFRESH_LIMIT` (default: 500) - max rank refresh requests per second, relay-wide
 - `RELATR_RELAY` (default: wss://relay.contextvm.org) - ContextVM relay URL for rank lookups
 - `RELATR_PUBKEY` (default: 750682303c9f0ddad75941b49edc9d46e3ed306b9ee3335338a21a3e404c5fa3) - Relatr service pubkey
 - `RELATR_SECRET_KEY` (optional) - Secret key for signing rank requests; auto-generated if not provided
@@ -64,7 +64,7 @@ export MID_THRESHOLD=0.5
 # export HIGH_THRESHOLD=0.9  # uncomment to enable 4-tier system with backfill
 # URL_POLICY_ENABLED is optional - enable to restrict URLs below MID_THRESHOLD
 # export URL_POLICY_ENABLED="true"  # truthy: true/1/yes/on (case-insensitive)
-export RANK_QUEUE_IP_DAILY_LIMIT=250
+export GLOBAL_RANK_REFRESH_LIMIT=500
 export RELATR_RELAY="wss://relay.contextvm.org"
 export RELATR_PUBKEY="750682303c9f0ddad75941b49edc9d46e3ed306b9ee3335338a21a3e404c5fa3"
 export RELATR_SECRET_KEY="your-secret-key-here"  # auto-generated if not set
