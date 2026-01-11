@@ -401,7 +401,7 @@ func (c *RankCache) refreshBatch(ctx context.Context, batch []string) error {
 // It reuses the cached relay connection for efficiency.
 func (c *RankCache) contextVMResponse(ctx context.Context, request *nostr.Event) (*nostr.Event, error) {
 	// Add timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	relay, err := c.getRelay(ctx)
@@ -423,19 +423,21 @@ func (c *RankCache) contextVMResponse(ctx context.Context, request *nostr.Event)
 		Authors: []string{c.relatrPubkey},
 	}
 
-	results, err := relay.QuerySync(ctx, filter)
+	// QuerySync() is not appropriate here because the response event is created *after*
+	// we publish the request. Instead we must subscribe and wait for the response.
+	sub, err := relay.Subscribe(ctx, nostr.Filters{filter})
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch the response: %w", err)
+		return nil, fmt.Errorf("failed to subscribe for response: %w", err)
 	}
+	defer sub.Unsub()
 
-	if len(results) == 0 {
-		return nil, fmt.Errorf("failed to fetch the response: no responses received")
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("failed to fetch the response: %w", ctx.Err())
+	case evt, ok := <-sub.Events:
+		if !ok || evt == nil {
+			return nil, fmt.Errorf("failed to fetch the response: no responses received")
+		}
+		return evt, nil
 	}
-
-	// If multiple responses, pick the first one and log a warning
-	if len(results) > 1 {
-		log.Printf("WARNING: received %d responses for request %s, using first one", len(results), request.ID)
-	}
-
-	return results[0], nil
 }
